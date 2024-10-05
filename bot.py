@@ -13,6 +13,62 @@ load_dotenv()
 import requests
 from bs4 import BeautifulSoup
 
+from dateutil.parser import parse
+from dateutil.parser import parserinfo
+
+import html2text
+
+class CustomParserInfo(parserinfo):
+    def _convert(self, lst):
+        dct = {}
+        for i, v in enumerate(lst):
+            if isinstance(v, tuple):
+                for v in v:
+                    dct[v.capitalize()] = i
+            else:
+                dct[v.capitalize()] = i
+        return dct
+    def convertyear(self, year, *args, **kwargs):
+        return None
+    def hms(self, name):
+        return None
+    def weekday(self, name):
+        return None
+    def jump(self, name):
+        return name.capitalize() in self._jump
+    def month(self, name):
+        try:
+            return self._months[name] + 1
+        except KeyError:
+            pass
+        return None
+
+    def pertain(self, name):
+        return name.capitalize() in self._pertain
+    def validate(self, res):
+        # move to info
+        if res.year is not None:
+            res.year = self.convertyear(res.year, res.century_specified)
+
+        if ((res.tzoffset == 0 and not res.tzname) or
+             (res.tzname == 'Z' or res.tzname == 'z')):
+            res.tzname = "UTC"
+            res.tzoffset = 0
+        elif res.tzoffset != 0 and res.tzname and self.utczone(res.tzname):
+            res.tzoffset = 0     
+        if res.month is None and res.year is None:
+            res.day = None
+        if res.month and res.day and res.month <= 31 and res.month > 12 and res.day <= 12:
+            temp = res.month
+            res.month = res.day
+            res.day = temp
+        if res.month and res.month > 12:
+            res.month = None
+        if res.day and res.day > 31:
+            res.day = None   
+
+        return True
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
@@ -31,17 +87,25 @@ if response.status_code == 200:
 else:
     print(f'Failed to retrieve the webpage. Status code: {response.status_code}')
 
-@bot.event
-async def on_ready():
-    print("R176 activated")
-    channel = bot.get_channel(CHANNEL_ID)
-    await channel.send("R176")
+# @bot.event
+# async def on_ready():
+#     print("R176 activated")
+#     channel = bot.get_channel(os.getenv("CHANNEL_ID"))
+#     await channel.send("R176")
+
+def is_date(string: str):
+    try: 
+        parse(string, parserinfo=CustomParserInfo())
+        return True
+
+    except ValueError:
+        return False
 
 @bot.command()
 async def add(ctx, *arr):
     result = 0
     for i in arr:
-        result += int(i)
+        result += float(i)
     await ctx.send(f"Result: {result}")
 
 @bot.command()
@@ -82,8 +146,15 @@ async def big_data(ctx, link: str):
     else:
         topic_id = ''.join(digits)
 
+    website = ""
     forum = api.forum_topic(topic_id)
     html = forum.posts[0].body.html
+    postsoup = BeautifulSoup(html, 'html.parser')
+    for link in postsoup.find_all('a'):
+        if link.get_text().lower() == 'website':
+            website = link.get('href')
+            break
+
     links = ""
     discordlink = re.findall(r'https://(?:www\.)?discord\.gg/[0-9a-zA-Z]+', html)
     challongelink = re.findall(r'https://(?:www\.)?challonge\.com/[0-9a-zA-Z]+', html)
@@ -96,6 +167,10 @@ async def big_data(ctx, link: str):
 
     # Print Forum Post Link
     links += f'**Forum Post:**\n<https://osu.ppy.sh/community/forums/topics/{topic_id}>\n'
+
+    # Print Website only if it exists
+    if website:
+        links += f"**Website:**\n<{website}>\n"
 
     # Print Google Sheets link(s)
     if sheetlink:
@@ -216,6 +291,41 @@ async def registrations(ctx):
                 links += link + "\n"
             await ctx.send(f"{links}")
         else: 
-            await ctx.send(f"No sheet provided.") 
+            await ctx.send(f"No sheet provided.")
+
+@bot.command()
+async def schedule(ctx, link: str):
+    schedule = ""
+    digits = [d for d in link if d.isdigit()]
+
+    if len(digits) > 7:
+        topic_id = ''.join(digits[:-1])
+    else:
+        topic_id = ''.join(digits)
+
+    forum = api.forum_topic(topic_id)
+    html = forum.posts[0].body.html
+    postsoup = BeautifulSoup(html, 'html.parser')
+    for well in postsoup.find_all(class_='well'):
+        datecount = 0
+        words = well.get_text().split()
+        for word in words:
+            if is_date(word):
+                datecount += 1
+        if datecount > 4:
+            schedule += f"{well}\n"
+
+    print(schedule)
+    
+    await ctx.send(html2text.html2text(schedule))
+
+@bot.command()
+async def check_date(ctx, string: str):
+    try: 
+        parse(string, parserinfo=CustomParserInfo())
+        await ctx.send("Is a date!")
+
+    except ValueError:
+        await ctx.send("Not a date!")
 
 bot.run(BOT_TOKEN)
